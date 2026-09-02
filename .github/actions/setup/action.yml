@@ -1,0 +1,31 @@
+name: Setup
+description: Select the Xcode that ships the Swift toolchain this package needs and warm the SwiftPM cache.
+
+inputs:
+  xcode:
+    description: Xcode version to select (see /Applications on the runner image).
+    default: "26"
+
+runs:
+  using: composite
+  steps:
+    - name: Select Xcode
+      shell: bash
+      env:
+        XCODE: ${{ inputs.xcode }}
+      run: |
+        set -eu
+        app="$(ls -d /Applications/Xcode_"$XCODE"*.app 2>/dev/null | sort -V | tail -1 || true)"
+        if [ -z "$app" ]; then
+          echo "::error::No Xcode $XCODE on this runner. Available:"; ls -d /Applications/Xcode*.app; exit 1
+        fi
+        sudo xcode-select -s "$app"
+        swift --version
+        xcodebuild -version
+
+    - uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4
+      with:
+        path: .build
+        key: spm-${{ runner.os }}-${{ inputs.xcode }}-${{ hashFiles('Package.swift', 'Package.resolved') }}
+        restore-keys: |
+          spm-${{ runner.os }}-${{ inputs.xcode }}-

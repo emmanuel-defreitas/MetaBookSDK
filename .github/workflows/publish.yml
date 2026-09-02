@@ -1,0 +1,104 @@
+# Ships a tagged version: builds the source archive, attaches it to the
+# GitHub Release, and notifies the Swift Package Index.
+#
+# Tag-driven. The version was chosen when next.yml cut release/vX.Y.Z and
+# wrote X.Y.Z into VERSION; release.yml turned that into the tag.
+#
+# Swift Package Index ingests new tags on its own once the package is listed.
+# Listing is a one-time PR to SwiftPackageIndex/PackageList — the job checks
+# whether that has happened and says so in the summary if not.
+name: Publish
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing vX.Y.Z tag to (re)publish assets for
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build source archive
+    runs-on: macos-26
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: ./.github/actions/setup
+
+      - id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "tag=${INPUT_TAG:-$REF_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify VERSION matches the tag
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -eu
+          want="v$(make -s --no-print-directory pkg-version)"
+          [ "$want" = "$TAG" ] || { echo "::error::VERSION is $want but the tag is $TAG"; exit 1; }
+
+      - run: make pack
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: MetabookSDK-${{ steps.meta.outputs.tag }}
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    name: Attach to release and notify Swift Package Index
+    needs: [ build ]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v5
+        with:
+          name: MetabookSDK-${{ needs.build.outputs.tag }}
+          path: dist
+
+      - name: Attach the source archive to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: gh release upload "$TAG" dist/* --clobber
+
+      - name: Notify Swift Package Index
+        env:
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.build.outputs.tag }}
+        run: |
+          set -eu
+          listed="$(curl -fsSL https://raw.githubusercontent.com/SwiftPackageIndex/PackageList/main/packages.json \
+            | tr -d '\r' | grep -ic "github.com/$REPO.git" || true)"
+          if [ "$listed" -gt 0 ]; then
+            # SPI polls GitHub for new tags; a fetch of the package page nudges it.
+            curl -fsS -o /dev/null "https://swiftpackageindex.com/$REPO" || true
+            {
+              echo "### Swift Package Index"
+              echo
+              echo "Listed. $TAG will appear at https://swiftpackageindex.com/$REPO once ingested."
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### Swift Package Index"
+              echo
+              echo "**Not listed yet.** Submit once at https://swiftpackageindex.com/add-a-package"
+              echo "(adds \`https://github.com/$REPO.git\` to SwiftPackageIndex/PackageList)."
+              echo "Every later tag is picked up automatically."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi

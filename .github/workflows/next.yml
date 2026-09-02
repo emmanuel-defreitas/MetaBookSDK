@@ -1,0 +1,75 @@
+# `next` moved: estimate the bump, cut/refresh `release/vX.Y.Z`, and let
+# pr-merged.yml open the draft PR into main.
+#
+#   1. classify the change level (breaking → major, major → minor, minor → patch)
+#      from the churn between main and next, unless the promote PR already
+#      recorded a version;
+#   2. check out release/vX.Y.Z from next and write X.Y.Z into VERSION and
+#      Sources/MetabookSDK/MetabookSDKInfo.swift;
+#   3. push it — which is what makes pr-merged.yml create the draft PR.
+name: Next
+
+on:
+  push:
+    branches:
+      - next
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Override the estimated bump
+        default: auto
+        type: choice
+        options: [auto, major, minor, patch]
+
+concurrency:
+  group: next
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  cut-release:
+    name: cut-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        id: app-token
+        with:
+          app-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Estimate the change level and cut or refresh the release branch
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          BUMP_INPUT: ${{ inputs.bump || 'auto' }}
+        run: |
+          set -eu
+          git config user.name  "metabook-automation[bot]"
+          git config user.email "metabook-automation[bot]@users.noreply.github.com"
+
+          git fetch --quiet --force origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            +refs/heads/next:refs/remotes/origin/next
+          info="$(make -s --no-print-directory churn-info FROM=origin/main TO=origin/next)"
+          auto_bump="$(printf '%s\n' "$info" | awk '{print $1}')"
+          churn="$(printf '%s\n' "$info" | awk '{print $4}')"
+          {
+            echo "### Change level"
+            echo
+            echo "- churn main...next: $churn lines"
+            echo "- estimated bump: \`$auto_bump\` (breaking = major, major = minor, minor = patch)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$BUMP_INPUT" = auto ]; then
+            make cut-release
+          else
+            make cut-release VERSION="$(make -s --no-print-directory next-version BUMP="$BUMP_INPUT")"
+          fi
