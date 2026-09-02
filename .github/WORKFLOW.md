@@ -108,7 +108,10 @@ Every step is a `make` target (`make help`).
 | tags v* | no create / update / delete except by bypass actors |
 
 Bypass actors: repository admins and the automation App (Integration
-`4752984`, the same one metabook-py uses).
+`4752984`, the same one metabook-py uses). On `dev` and `next` the bypass is
+**pull-request only**: nobody may push to or delete those lanes directly, which
+is what stops the repository's head-branch auto-delete from removing `dev`
+after a promote PR merges. The sync and promote flows only ever open PRs.
 
 ## Secrets
 
