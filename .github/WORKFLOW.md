@@ -79,7 +79,58 @@ disagrees with `VERSION`. Merge with **merge commit**.
 The tag triggers `publish.yml`, which rebuilds the source archive, attaches
 `MetabookSDK-vX.Y.Z.zip` (+ sha256) to the release, and nudges the Swift
 Package Index. SPI ingests tags on its own once the package is listed; the
-job's summary says whether it is.
+job's summary says whether it is (see [Swift Package Index](#swift-package-index)).
+
+## Swift Package Index
+
+Listing is a **one-time** manual step. Once the package is on the index, SPI
+polls GitHub and ingests every later tag on its own — there is nothing to
+repeat per release.
+
+Before submitting, run the preflight:
+
+```bash
+make spi-check
+```
+
+It asserts each requirement from the add-a-package page against this
+repository — public, `Package.swift` in the root, Swift 5.0+, a `vX.Y.Z` tag,
+valid `swift package dump-package` output, an `https://…​.git` URL, and a
+clean build — plus the parts SPI's builder enforces silently: `.spi.yml` under
+its 1500-byte read limit, `platform:` values drawn from the builder's platform
+list, and `documentation_targets` naming targets `Package.swift` actually
+declares. A bad `.spi.yml` does not fail loudly; it just produces no docs.
+
+`make spi-check` fails until `v0.0.1` exists, because SPI has nothing to
+ingest from an untagged repository. So the order is: merge the release PR →
+`release.yml` tags the version → `make spi-check` passes → submit.
+
+To submit, sign in at <https://swiftpackageindex.com/add-a-package> and paste
+the URL that `make spi-url` prints:
+
+```
+https://github.com/emmanuel-defreitas/MetaBookSDK.git
+```
+
+The form opens a PR against `SwiftPackageIndex/PackageList` under your own
+GitHub account, which is why it is not automated here. A maintainer merges it,
+and the package appears at
+<https://swiftpackageindex.com/emmanuel-defreitas/MetaBookSDK>.
+
+Afterwards, `publish.yml` flips its step summary from "not listed yet" to the
+package URL on every release, so a package that silently falls off the index
+shows up in CI. The README badges resolve once the first ingest completes —
+until then shields.io renders them as unavailable, which is expected.
+
+Docs are configured by `.spi.yml`: SPI builds DocC for `MetabookSDK` on the
+`ios` and `macos-spm` builder platforms and hosts it from the package page.
+
+SPI builds every package across Swift 6.1–6.4. Because `Package.swift`
+declares `swift-tools-version: 6.2`, the Swift 6.1 row on the package page
+will always be red — 6.1 cannot parse a 6.2 manifest. That is expected, not a
+regression. `make spi-check` names the rows that will fail, and fails outright
+if the tools version ever runs ahead of SPI's *newest* builder, which would
+break ingestion rather than just one row.
 
 ## Workflows
 
