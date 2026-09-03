@@ -1,5 +1,9 @@
 # MetabookSDK
 
+[![](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Femmanuel-defreitas%2FMetaBookSDK%2Fbadge%3Ftype%3Dswift-versions)](https://swiftpackageindex.com/emmanuel-defreitas/MetaBookSDK)
+[![](https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2Femmanuel-defreitas%2FMetaBookSDK%2Fbadge%3Ftype%3Dplatforms)](https://swiftpackageindex.com/emmanuel-defreitas/MetaBookSDK)
+[![](https://img.shields.io/badge/documentation-gray?logo=swift&logoColor=white)](https://swiftpackageindex.com/emmanuel-defreitas/MetaBookSDK/~/documentation/metabooksdk)
+
 Swift Package for the [metabook-py](https://github.com/emmanuel-defreitas/metabook-py) Book Structure API. Typed models, an async client, `@Observable` view models, and a handful of SwiftUI views so any Swift project can search Project Gutenberg or upload an EPUB and render the resulting structural schema.
 
 No book text ever crosses the wire. Every node carries counts and positions only.
@@ -20,7 +24,7 @@ Add the package in Xcode (File → Add Package Dependencies) or in `Package.swif
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/emmanuel-defreitas/MetabookSDK.git", from: "0.1.0"),
+    .package(url: "https://github.com/emmanuel-defreitas/MetaBookSDK.git", from: "0.0.1"),
 ],
 targets: [
     .target(name: "MyApp", dependencies: ["MetabookSDK"]),
@@ -141,6 +145,7 @@ struct BookStructureScreen: View {
 ```bash
 make ci        # lint, version check, build, tests, iOS Simulator build
 make pack      # release build + source archive in dist/
+make spi-check # Swift Package Index listing requirements
 make help      # everything else
 ```
 

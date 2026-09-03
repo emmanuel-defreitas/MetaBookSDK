@@ -67,7 +67,7 @@ pkg_version         = tr -d '[:space:]' < VERSION
         release-pr release-branch delete-branch tag-release \
         rulesets-diff rulesets-apply \
         churn-info churn-bump bootstrap-lanes promote-pr cut-release version-check \
-        sync-lanes cleanup-cycle cleanup-local
+        sync-lanes cleanup-cycle cleanup-local spi-url spi-check
 
 
 # --- build & package --------------------------------------------------------
@@ -98,6 +98,116 @@ pack: ## Build the publishable source archive (the artifact CI uploads and attac
 	swift package archive-source --output "$(DIST_DIR)/MetabookSDK-$$v.zip"; \
 	(cd $(DIST_DIR) && shasum -a 256 "MetabookSDK-$$v.zip" > "MetabookSDK-$$v.zip.sha256"); \
 	ls -lh $(DIST_DIR)
+
+# --- Swift Package Index ----------------------------------------------------
+
+# Listing is a one-time PR to SwiftPackageIndex/PackageList, opened for you by
+# the OAuth flow at https://swiftpackageindex.com/add-a-package. Every later
+# tag is ingested automatically. `spi-check` is the preflight for that one
+# submission and a regression guard afterwards: it asserts each requirement
+# from the add-a-package page plus the .spi.yml schema SPI's builder enforces.
+SPI_PACKAGE_LIST ?= https://raw.githubusercontent.com/SwiftPackageIndex/PackageList/main/packages.json
+SPI_PLATFORMS    := android ios linux macos-spm macos-xcodebuild tvos visionos watchos wasm
+# SPIManifest's SwiftVersion enum — the toolchains SPI's builder actually has.
+SPI_SWIFT        := 6.1 6.2 6.3 6.4
+SPI_MANIFEST_MAX := 1500
+
+# The URL SPI wants: canonical owner/repo casing, https, and a .git suffix.
+spi_url = slug="$$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"; \
+          [ -n "$$slug" ] || slug="$$(git remote get-url origin \
+            | sed -E 's,^(https://github\.com/|git@github\.com:),,; s,\.git$$,,')"; \
+          url="https://github.com/$$slug.git"
+
+spi-url: ## Print the canonical package URL to submit to the Swift Package Index.
+	@set -eu; $(spi_url); echo "$$url"
+
+spi-check: ## Check every Swift Package Index listing requirement (run before submitting).
+	@set -eu; $(spi_url); fail=0; \
+	ok()   { printf '  \033[32m✓\033[0m %s\n' "$$1"; }; \
+	bad()  { printf '  \033[31m✗\033[0m %s\n' "$$1"; fail=1; }; \
+	echo "Swift Package Index preflight for $$url"; echo; \
+	\
+	vis="$$(gh repo view --json visibility -q .visibility 2>/dev/null || echo UNKNOWN)"; \
+	[ "$$vis" = "PUBLIC" ] && ok "repository is public" \
+	  || bad "repository visibility is $$vis (SPI needs PUBLIC)"; \
+	\
+	case "$$url" in \
+	  https://github.com/*.git) ok "URL has the https protocol and the .git extension" ;; \
+	  *) bad "URL must be https://…​.git, got $$url" ;; \
+	esac; \
+	\
+	[ -f Package.swift ] && ok "Package.swift is in the root folder" \
+	  || bad "no Package.swift in the root folder"; \
+	\
+	tools="$$(sed -n 's|^// *swift-tools-version: *\([0-9.]*\).*|\1|p' Package.swift | head -1)"; \
+	case "$$tools" in \
+	  "") bad "cannot read swift-tools-version from Package.swift" ;; \
+	  [0-4].*) bad "swift-tools-version $$tools is below the required 5.0" ;; \
+	  *) ok "swift-tools-version $$tools is 5.0 or later" ;; \
+	esac; \
+	newest="$$(for v in $(SPI_SWIFT); do echo "$$v"; done | sort -V | tail -1)"; \
+	if [ -n "$$tools" ] && [ "$$(printf '%s\n%s\n' "$$tools" "$$newest" | sort -V | tail -1)" != "$$newest" ]; then \
+	  bad "swift-tools-version $$tools is newer than SPI's newest builder toolchain ($$newest) — the manifest will not parse on their side"; \
+	else \
+	  older="$$(for v in $(SPI_SWIFT); do \
+	    [ "$$(printf '%s\n%s\n' "$$v" "$$tools" | sort -V | head -1)" = "$$v" ] && [ "$$v" != "$$tools" ] && echo "$$v"; \
+	  done | tr '\n' ' ')"; \
+	  ok "SPI builds on Swift $(SPI_SWIFT)$${older:+ (rows for $${older%% } will be red: older than $$tools)}"; \
+	fi; \
+	\
+	if swift package dump-package > /tmp/spi-dump.$$$$.json 2>/tmp/spi-dump.$$$$.err; then \
+	  ok "swift package dump-package emits valid JSON"; \
+	else \
+	  bad "swift package dump-package failed:"; sed 's/^/      /' /tmp/spi-dump.$$$$.err; \
+	fi; \
+	\
+	git fetch --quiet --tags origin 2>/dev/null || true; \
+	tag="$$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -1)"; \
+	if [ -n "$$tag" ]; then ok "semantic version tag present ($$tag)"; \
+	else bad "no vX.Y.Z tag yet — merge the release PR so release.yml tags v$$($(pkg_version))"; fi; \
+	\
+	if swift build > /tmp/spi-build.$$$$.log 2>&1; then \
+	  ok "the package compiles (macOS; 'make ci' also covers the iOS Simulator)"; \
+	else \
+	  bad "swift build failed:"; tail -20 /tmp/spi-build.$$$$.log | sed 's/^/      /'; \
+	fi; \
+	\
+	if [ -f .spi.yml ]; then \
+	  size="$$(wc -c < .spi.yml | tr -d ' ')"; \
+	  [ "$$size" -le $(SPI_MANIFEST_MAX) ] \
+	    && ok ".spi.yml is $$size bytes (SPI reads at most $(SPI_MANIFEST_MAX))" \
+	    || bad ".spi.yml is $$size bytes — SPI ignores anything over $(SPI_MANIFEST_MAX)"; \
+	  for p in $$(sed -n 's/.*platform:[[:space:]]*\([a-zA-Z-]*\).*/\1/p' .spi.yml); do \
+	    n="$$(echo "$$p" | tr 'A-Z' 'a-z')"; \
+	    case "$$n" in macos|macosspm) n=macos-spm ;; macosxcodebuild) n=macos-xcodebuild ;; esac; \
+	    case " $(SPI_PLATFORMS) " in \
+	      *" $$n "*) ok ".spi.yml platform '$$p' is a builder platform" ;; \
+	      *) bad ".spi.yml platform '$$p' is not one of: $(SPI_PLATFORMS)" ;; \
+	    esac; \
+	  done; \
+	  for t in $$(sed -n 's/.*documentation_targets:[[:space:]]*\[\(.*\)\].*/\1/p' .spi.yml | tr -d ' ' | tr ',' ' '); do \
+	    if jq -e --arg t "$$t" '.targets[] | select(.name == $$t)' /tmp/spi-dump.$$$$.json >/dev/null 2>&1; then \
+	      ok ".spi.yml documents target '$$t', which exists"; \
+	    else \
+	      bad ".spi.yml documents target '$$t', which Package.swift does not declare"; \
+	    fi; \
+	  done; \
+	else \
+	  ok "no .spi.yml (optional — only needed for hosted DocC)"; \
+	fi; \
+	\
+	if grep -qF "$$url" README.md; then ok "README.md advertises the canonical URL"; \
+	else bad "README.md does not mention $$url (check the owner/repo casing)"; fi; \
+	\
+	if curl -fsSL $(SPI_PACKAGE_LIST) | grep -qiF "$$url"; then \
+	  echo; echo "Already listed: https://swiftpackageindex.com/$${url#https://github.com/}"; \
+	else \
+	  echo; echo "Not listed yet. Submit $$url once at https://swiftpackageindex.com/add-a-package"; \
+	fi; \
+	rm -f /tmp/spi-dump.$$$$.json /tmp/spi-dump.$$$$.err /tmp/spi-build.$$$$.log; \
+	echo; \
+	[ "$$fail" -eq 0 ] && echo "All Swift Package Index requirements met." \
+	  || { echo "::error::the package is not ready for the Swift Package Index"; exit 1; }
 
 cut-release: ## Cut or refresh release/v<VERSION> from origin/next (env: VERSION).
 	@set -eu; \
