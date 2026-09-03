@@ -125,6 +125,13 @@ until then shields.io renders them as unavailable, which is expected.
 Docs are configured by `.spi.yml`: SPI builds DocC for `MetabookSDK` on the
 `ios` and `macos-spm` builder platforms and hosts it from the package page.
 
+SPI builds every package across Swift 6.1–6.4. Because `Package.swift`
+declares `swift-tools-version: 6.2`, the Swift 6.1 row on the package page
+will always be red — 6.1 cannot parse a 6.2 manifest. That is expected, not a
+regression. `make spi-check` names the rows that will fail, and fails outright
+if the tools version ever runs ahead of SPI's *newest* builder, which would
+break ingestion rather than just one row.
+
 ## Workflows
 
 | File | Trigger | Does |

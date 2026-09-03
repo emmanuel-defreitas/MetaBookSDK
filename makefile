@@ -108,6 +108,8 @@ pack: ## Build the publishable source archive (the artifact CI uploads and attac
 # from the add-a-package page plus the .spi.yml schema SPI's builder enforces.
 SPI_PACKAGE_LIST ?= https://raw.githubusercontent.com/SwiftPackageIndex/PackageList/main/packages.json
 SPI_PLATFORMS    := android ios linux macos-spm macos-xcodebuild tvos visionos watchos wasm
+# SPIManifest's SwiftVersion enum — the toolchains SPI's builder actually has.
+SPI_SWIFT        := 6.1 6.2 6.3 6.4
 SPI_MANIFEST_MAX := 1500
 
 # The URL SPI wants: canonical owner/repo casing, https, and a .git suffix.
@@ -143,6 +145,15 @@ spi-check: ## Check every Swift Package Index listing requirement (run before su
 	  [0-4].*) bad "swift-tools-version $$tools is below the required 5.0" ;; \
 	  *) ok "swift-tools-version $$tools is 5.0 or later" ;; \
 	esac; \
+	newest="$$(for v in $(SPI_SWIFT); do echo "$$v"; done | sort -V | tail -1)"; \
+	if [ -n "$$tools" ] && [ "$$(printf '%s\n%s\n' "$$tools" "$$newest" | sort -V | tail -1)" != "$$newest" ]; then \
+	  bad "swift-tools-version $$tools is newer than SPI's newest builder toolchain ($$newest) — the manifest will not parse on their side"; \
+	else \
+	  older="$$(for v in $(SPI_SWIFT); do \
+	    [ "$$(printf '%s\n%s\n' "$$v" "$$tools" | sort -V | head -1)" = "$$v" ] && [ "$$v" != "$$tools" ] && echo "$$v"; \
+	  done | tr '\n' ' ')"; \
+	  ok "SPI builds on Swift $(SPI_SWIFT)$${older:+ (rows for $${older%% } will be red: older than $$tools)}"; \
+	fi; \
 	\
 	if swift package dump-package > /tmp/spi-dump.$$$$.json 2>/tmp/spi-dump.$$$$.err; then \
 	  ok "swift package dump-package emits valid JSON"; \
@@ -167,8 +178,10 @@ spi-check: ## Check every Swift Package Index listing requirement (run before su
 	    && ok ".spi.yml is $$size bytes (SPI reads at most $(SPI_MANIFEST_MAX))" \
 	    || bad ".spi.yml is $$size bytes — SPI ignores anything over $(SPI_MANIFEST_MAX)"; \
 	  for p in $$(sed -n 's/.*platform:[[:space:]]*\([a-zA-Z-]*\).*/\1/p' .spi.yml); do \
+	    n="$$(echo "$$p" | tr 'A-Z' 'a-z')"; \
+	    case "$$n" in macos|macosspm) n=macos-spm ;; macosxcodebuild) n=macos-xcodebuild ;; esac; \
 	    case " $(SPI_PLATFORMS) " in \
-	      *" $$p "*) ok ".spi.yml platform '$$p' is a builder platform" ;; \
+	      *" $$n "*) ok ".spi.yml platform '$$p' is a builder platform" ;; \
 	      *) bad ".spi.yml platform '$$p' is not one of: $(SPI_PLATFORMS)" ;; \
 	    esac; \
 	  done; \
